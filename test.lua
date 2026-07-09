@@ -39,3 +39,15 @@ pr(s.deserialize(seri))
 
 a = s.serialize_string( 1,2,3,4,5 )
 print(#a, s.deseristring_string(a))
+
+-- test lz4 compression (< 1024)
+a = s.serialize_string_lz4( 1 )
+print("small tag:", string.byte(a,1), "len:", #a, "expected: 0x00, len=7")
+local r = { s.deseristring_string_lz4(a) }
+for _, v in ipairs(r) do print(v) end
+
+-- test lz4 compression (>= 1024)
+local big = string.rep("Hello World! ", 1000)
+a = s.serialize_string_lz4( big )
+print("large tag:", string.byte(a,1), "len:", #a, "raw len:", #s.serialize_string(big))
+print(s.deseristring_string_lz4(a))
