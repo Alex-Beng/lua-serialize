@@ -1024,6 +1024,30 @@ des_decrypt_block(const uint8_t ks[16][6], const uint8_t block[8], uint8_t out[8
 	permute(pre, out, des_fp, 64);
 }
 
+static void
+des_encrypt_block(const uint8_t ks[16][6], const uint8_t block[8], uint8_t out[8]) {
+	uint8_t ip[8];
+	permute(block, ip, des_ip, 64);
+
+	uint8_t l[4], r[4];
+	memcpy(l, ip, 4);
+	memcpy(r, ip + 4, 4);
+
+	for (int i = 0; i < 16; i++) {
+		uint8_t fout[4];
+		des_f(r, ks[i], fout);
+		uint8_t nl[4];
+		memcpy(nl, r, 4);
+		for (int j = 0; j < 4; j++) r[j] = l[j] ^ fout[j];
+		memcpy(l, nl, 4);
+	}
+
+	uint8_t pre[8];
+	memcpy(pre, r, 4);
+	memcpy(pre + 4, l, 4);
+	permute(pre, out, des_fp, 64);
+}
+
 static int
 des_cbc_decrypt(const uint8_t key[8], const uint8_t iv[8],
                 const uint8_t *data, int len, uint8_t **out) {
@@ -1056,6 +1080,37 @@ des_cbc_decrypt(const uint8_t key[8], const uint8_t iv[8],
 }
 
 static int
+des_cbc_encrypt(const uint8_t key[8], const uint8_t iv[8],
+                const uint8_t *data, int len, uint8_t **out) {
+	int pad = 8 - (len % 8);
+	if (pad == 0) pad = 8;
+	int out_len = len + pad;
+
+	*out = (uint8_t *)malloc(out_len);
+	if (!*out) return -1;
+
+	uint8_t ks[16][6];
+	des_key_schedule(key, ks);
+
+	memcpy(*out, data, len);
+	for (int i = len; i < out_len; i++)
+		(*out)[i] = pad;
+
+	uint8_t prev[8];
+	memcpy(prev, iv, 8);
+
+	for (int i = 0; i < out_len; i += 8) {
+		uint8_t block[8];
+		for (int j = 0; j < 8; j++)
+			block[j] = (*out)[i + j] ^ prev[j];
+		des_encrypt_block(ks, block, (*out) + i);
+		memcpy(prev, (*out) + i, 8);
+	}
+
+	return out_len;
+}
+
+static int
 ldes_decrypt_cbc(lua_State *L) {
 	size_t klen, ilen, dlen;
 	const char *key  = luaL_checklstring(L, 1, &klen);
@@ -1078,6 +1133,27 @@ ldes_decrypt_cbc(lua_State *L) {
 	return 1;
 }
 
+static int
+ldes_encrypt_cbc(lua_State *L) {
+	size_t klen, ilen, dlen;
+	const char *key  = luaL_checklstring(L, 1, &klen);
+	const char *iv   = luaL_checklstring(L, 2, &ilen);
+	const char *data = luaL_checklstring(L, 3, &dlen);
+
+	if (klen != 8 || ilen != 8)
+		return luaL_error(L, "key and iv must be 8 bytes");
+
+	uint8_t *out = NULL;
+	int out_len = des_cbc_encrypt((const uint8_t *)key, (const uint8_t *)iv,
+	                              (const uint8_t *)data, (int)dlen, &out);
+	if (out_len < 0 || !out)
+		return luaL_error(L, "DES-CBC encryption failed");
+
+	lua_pushlstring(L, (const char *)out, out_len);
+	free(out);
+	return 1;
+}
+
 int
 luaopen_serialize(lua_State *L) {
 	luaL_Reg l[] = {
@@ -1091,6 +1167,7 @@ luaopen_serialize(lua_State *L) {
 		{ "serialize_string_lz4", seristring_lz4 },
 		{ "deseristring_string_lz4", deseristring_lz4 },
 		{ "des_decrypt_cbc", ldes_decrypt_cbc },
+		{ "des_encrypt_cbc", ldes_encrypt_cbc },
 		{ "dump", _dump },
 		{ NULL, NULL },
 	};
